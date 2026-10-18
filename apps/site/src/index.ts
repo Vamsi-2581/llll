@@ -127,6 +127,14 @@ async function handle(request: Request, env: PortalEnv): Promise<Response> {
   }
   if (path === '/.well-known/llll') return json({ product: 'llll', kind: 'client', origin: env.PUBLIC_ORIGIN, id: 'client', name: 'L4', apiVersion: 1 })
   if (path.startsWith('/api/')) fail(404, 'API route not found')
+  // Static Assets' SPA fallback is index.html, which is the prerendered landing
+  // page. UUID routes need Nuxt's client-only entry to preserve their URL.
+  const serverPath = /^\/([a-f0-9-]{36})(?:\/|$)/i.exec(path)
+  if (['GET', 'HEAD'].includes(request.method) && serverPath && uuidSchema.safeParse(serverPath[1]).success) {
+    // auto-trailing-slash redirects /200.html to /200; fetch its canonical URL
+    // internally so that redirect cannot replace the browser's Server route.
+    return env.ASSETS.fetch(new Request(new URL('/200', url), request))
+  }
   return env.ASSETS.fetch(request)
 }
 export default {
