@@ -1,7 +1,9 @@
+import { requireWorkersBuild } from './ci-only.mjs'
 // User-operated Cloudflare installer. Agents deploy through the connected API tool.
 import { readFile, writeFile, mkdir } from 'node:fs/promises'
 import { resolve } from 'node:path'
 import { randomBytes, createHash } from 'node:crypto'
+requireWorkersBuild()
 const root = resolve(import.meta.dirname, '..')
 const id = process.env.INSTALLATION_ID || 'community'
 if (!/^[a-z][a-z0-9-]{0,31}$/.test(id)) throw new Error('INSTALLATION_ID must be a lowercase name of up to 32 characters')
@@ -75,4 +77,4 @@ form.append('installation.mjs', new Blob([artifact.modules.installation.content]
 await api(`/accounts/${account}/workers/scripts/${worker}`, 'PUT', form)
 await api(`/accounts/${account}/workers/scripts/${worker}/subdomain`, 'POST', { enabled: true, previews_enabled: false })
 await api(`/accounts/${account}/workers/scripts/${worker}/schedules`, 'PUT', [{ cron: '23 3 * * *' }])
-console.log(`Installation: ${origin}\nPrivate owner setup: ${origin}/connections#claim=${saved.setupToken}\nKeep ${file} private and backed up. Connect provisioning credentials in Installation settings when needed. Attach a custom domain through Cloudflare and update PUBLIC_ORIGIN before using it.`)
+console.log(`Installation: ${origin}\nPrivate owner setup: ${origin}/connections#claim=${saved.setupToken}\nKeep ${file} private and backed up. Connect provisioning credentials in Instance settings when needed. Attach a custom domain through Cloudflare and update PUBLIC_ORIGIN before using it.`)

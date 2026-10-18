@@ -16,14 +16,14 @@ The following source and verification entry points exist at the audited baseline
 
 | Capability | Source / automated verification entry point | Remaining runtime acceptance |
 | --- | --- | --- |
-| Instance identity and server isolation | [Controller](../apps/installation/src/index.ts), [identity tests](../tests/unit/installation-identity.test.ts), [integration fixture](../scripts/test-installation.mjs) | Fresh owner/member, two Servers, removal, direct/Shell sessions |
+| Instance identity and server isolation | [Controller](../apps/instance/src/index.ts), [identity tests](../tests/unit/installation-identity.test.ts), [integration fixture](../scripts/test-instance.mjs) | Fresh owner/member, two Servers, removal, direct/Shell sessions |
 | Chat, realtime and search | [Channels](../app/pages/channels.vue), [socket tests](../tests/unit/channel-socket.test.ts), [search tests](../tests/unit/message-search.test.ts) | Two browser clients, proxy WebSocket handshake, reload/reconnect, denied content |
 | Tasks | [Tasks](../app/pages/tasks.vue), [assignee tests](../tests/unit/task-assignee.test.ts) | Task workflow with a non-owner and denied operations |
 | Data | [Databases](../app/pages/databases.vue), [View tests](../tests/unit/database-views.test.ts) | Resource permissions and concurrent editing across Views/Documents/Canvases |
 | Mail | [Mailbox UI](../app/pages/mail/index.vue), [ingest tests](../tests/unit/inbound-email.test.ts), [delivery tests](../tests/unit/mail-delivery.test.ts) | Named Provider, actual receive/reply, attachments, rejection and retry |
 | Agents | [Turn tests](../tests/unit/agent-turns.test.ts), [ingress tests](../tests/unit/agent-ingress.test.ts) | Configured inference, local grants, approval continuation and failure recovery |
 | Notifications and calls | [Notification tests](../tests/unit/notifications.test.ts), [Live tests](../tests/unit/live-room.test.ts) | Real-device push and configured media Provider, including access revocation |
-| Install and recovery | [Compose checks](../scripts/test-self-host-installation.mjs), [Backup tests](../tests/unit/backup-format.test.ts), [release workflow](../.github/workflows/publish-installer-release.yml), [image workflow](../.github/workflows/publish-image.yml) | Fresh pinned release/image, update, browser transport and restore of both layers |
+| Install and recovery | [Compose checks](../scripts/test-self-host-instance.mjs), [Backup tests](../tests/unit/backup-format.test.ts), [release workflow](../.github/workflows/publish-installer-release.yml), [image workflow](../.github/workflows/publish-image.yml) | Fresh pinned release/image, update, browser transport and restore of both layers |
 
 This is an initial map of evidence, not an exhaustive test inventory. Apps, files, invitations, PWA and Telegram are included in milestone acceptance even where no individual test file is listed above.
 
