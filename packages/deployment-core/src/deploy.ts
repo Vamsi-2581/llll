@@ -33,7 +33,6 @@ type ExistingWorker = {
   accessAudience?: string
   accessApplicationId?: string
   accessHealthApplicationId?: string
-  accessDeletionApplicationId?: string
   primary?: boolean
   lifecycleBindingNames?: string[]
   bindings?: ExistingWorkerBinding[]
@@ -102,7 +101,7 @@ function mailDomain(request: DeployRequest) {
 }
 
 export function isL4Worker(bindings: ExistingWorkerBinding[]) {
-  const marker = bindings.find(binding => binding.name === 'LLLL_INSTALLATION')
+  const marker = bindings.find(binding => binding.name === 'LLLL_SERVER_MARKER')
   return marker?.type === 'plain_text' && marker.text === installerMarker
 }
 
@@ -111,7 +110,7 @@ async function inspectWorker(client: Cloudflare, accountId: string, workerName: 
     if (worker.id !== workerName) continue
     const settings = await client.workers.scripts.scriptAndVersionSettings.get(workerName, { account_id: accountId })
     const bindings = settings.bindings as ExistingWorkerBinding[] || []
-    const marker = bindings.find(binding => binding.name === 'LLLL_INSTALLATION')
+    const marker = bindings.find(binding => binding.name === 'LLLL_SERVER_MARKER')
     if (marker?.type === 'plain_text' && marker.text === bootstrapMarker) return { exists: false }
     if (!isL4Worker(bindings)) {
       throw createError({ statusCode: 409, statusMessage: `A non-L4 Worker named ${workerName} already exists` })
@@ -141,7 +140,6 @@ async function inspectWorker(client: Cloudflare, accountId: string, workerName: 
       accessAudience: text('CF_ACCESS_AUD'),
       accessApplicationId: text('CF_ACCESS_APP_ID'),
       accessHealthApplicationId: text('CF_ACCESS_HEALTH_APP_ID'),
-      accessDeletionApplicationId: text('CF_ACCESS_DELETION_APP_ID'),
       primary: text('LLLL_PRIMARY') === 'true',
       lifecycleBindingNames,
       bindings,
@@ -155,7 +153,7 @@ async function primaryWorker(client: Cloudflare, accountId: string): Promise<str
     if (!worker.id) continue
     const settings = await client.workers.scripts.scriptAndVersionSettings.get(worker.id, { account_id: accountId })
     const bindings = settings.bindings as ExistingWorkerBinding[] || []
-    const marker = bindings.find(binding => binding.name === 'LLLL_INSTALLATION')
+    const marker = bindings.find(binding => binding.name === 'LLLL_SERVER_MARKER')
     const primary = bindings.find(binding => binding.name === 'LLLL_PRIMARY')
     if (marker?.type === 'plain_text' && marker.text === installerMarker && primary?.text === 'true') return worker.id
   }
@@ -360,7 +358,7 @@ async function ensureBootstrapWorkerTarget(accessToken: string, accountId: strin
   const metadata = {
     main_module: 'llll-bootstrap.mjs',
     compatibility_date: compatibilityDate,
-    bindings: [{ type: 'plain_text', name: 'LLLL_INSTALLATION', text: bootstrapMarker }],
+    bindings: [{ type: 'plain_text', name: 'LLLL_SERVER_MARKER', text: bootstrapMarker }],
   }
   const source = "export default { fetch() { return new Response('L4 is being installed.', { status: 503 }) } }"
   const form = new FormData()
@@ -389,7 +387,7 @@ async function uploadWorker(
   resources: { databaseId: string, bucketName: string | undefined, kvId: string, assetsJwt: string, origin: string },
   existing: ExistingWorker,
   ownerSetupToken: string | null,
-  access: { issuer: string, audience: string, applicationId: string, healthApplicationId: string, deletionApplicationId: string } | null,
+  access: { issuer: string, audience: string, applicationId: string, healthApplicationId: string } | null,
   primary: boolean,
 ) {
   if (request.backupBucketName) {
@@ -414,7 +412,7 @@ async function uploadWorker(
     { type: 'plain_text', name: 'LLLL_ACCOUNT_ID', text: accountId },
     { type: 'plain_text', name: 'LLLL_WORKER_NAME', text: request.workerName },
     { type: 'plain_text', name: 'LLLL_CUSTOM_DOMAIN', text: request.customDomainEnabled ? 'true' : 'false' },
-    { type: 'plain_text', name: 'LLLL_INSTALLATION', text: installerMarker },
+    { type: 'plain_text', name: 'LLLL_SERVER_MARKER', text: installerMarker },
     { type: 'plain_text', name: 'LLLL_VERSION', text: manifest.version },
     ...manifest.durableObjects.map(item => ({ type: 'durable_object_namespace', name: item.binding, class_name: item.className })),
   ]
@@ -434,7 +432,6 @@ async function uploadWorker(
       { type: 'plain_text', name: 'CF_ACCESS_AUD', text: access.audience },
       { type: 'plain_text', name: 'CF_ACCESS_APP_ID', text: access.applicationId },
       { type: 'plain_text', name: 'CF_ACCESS_HEALTH_APP_ID', text: access.healthApplicationId },
-      { type: 'plain_text', name: 'CF_ACCESS_DELETION_APP_ID', text: access.deletionApplicationId },
     )
   }
   if (request.mailEnabled) {
@@ -725,7 +722,6 @@ export async function deployL4(
           audience: existing.accessAudience || '',
           applicationId: existing.accessApplicationId || '',
           healthApplicationId: existing.accessHealthApplicationId || '',
-          deletionApplicationId: existing.accessDeletionApplicationId || '',
         }
       : await ensureCloudflareAccess(client, request, requestedHostname, accessWorkerId)
     : null
