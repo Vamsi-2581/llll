@@ -2,6 +2,7 @@
 import CommunityRail from '../../../../packages/client-ui/CommunityRail.vue'
 import { SERVER_UNREACHABLE } from '../composables/useShell'
 import { normalizeRoutePath } from '../utils/shell-route'
+import { readDeploymentClaim } from '../../../../shared/deploy-handoff'
 
 const shell = useShell()
 const route = useRoute()
@@ -12,19 +13,8 @@ const queryOrigin = computed(() => {
   const value = route.query.server
   return typeof value === 'string' ? value : ''
 })
-const queryClaim = computed(() =>
-  typeof route.query.claim === 'string' ? route.query.claim : undefined,
-)
+const queryClaim = computed(() => readDeploymentClaim(route.hash))
 const checkingAddress = ref('')
-async function openGroup(origin: string) {
-  const server = shell.servers.value.find(
-    (item) => item.origin === origin,
-  )
-  if (server) {
-    await shell.open(server)
-    await navigateTo('/open')
-  }
-}
 function openServer(origin: string, id: string) {
   const server = shell.servers.value.find(
     (item) => item.origin === origin,
@@ -33,11 +23,11 @@ function openServer(origin: string, id: string) {
 }
 function connect() {
   shell.selected.value = ''
-  void navigateTo('/open')
+  void navigateTo('/create')
 }
-const showDeploy = computed(() => path.value === '/deploy')
+const showCreate = computed(() => path.value === '/create')
 /** The shell survives route changes as a v-show'd component, and its connect-on-mount check cannot run again.
- * When the deploy completion screen or a saved Server link navigates to /open?server=…,
+ * When the deploy completion screen or a saved Server link navigates to /create?server=…,
  * connect here (with one bounded retry: a freshly deployed Server may not answer right away). */
 let lastAutoOrigin = ''
 async function connectQuery(
@@ -56,7 +46,7 @@ async function connectQuery(
       return connectQuery(origin, claim, 1)
     }
     error.value = message
-    // Keep the failed address in the form so a retry is one click on Open.
+    // Keep the failed address in the form so a retry is one click on Connect.
     shell.address.value = origin
   }
 }
@@ -65,12 +55,9 @@ async function handleQuery(queryOrigin: string, claim: string | undefined) {
   lastAutoOrigin = queryOrigin
   if (!queryOrigin) return
   checkingAddress.value = queryOrigin
-  const server = await connectQuery(queryOrigin, claim).finally(() => {
+  await connectQuery(queryOrigin, claim).finally(() => {
     checkingAddress.value = ''
   })
-  // Only after a successful connect may the one-time claim leave the address bar.
-  if (server && route.query.claim)
-    history.replaceState(history.state, '', '/open')
 }
 function selectFrame(element: unknown, origin: string) {
   if (element instanceof HTMLIFrameElement) shell.frames.value[origin] = element
@@ -84,7 +71,7 @@ onMounted(async () => {
 watch(
   () => route.fullPath,
   async () => {
-    if (path.value === '/open' && queryOrigin.value)
+    if (path.value === '/create' && queryOrigin.value)
       await handleQuery(queryOrigin.value, queryClaim.value)
     else if (route.params.serverId) await mountServer()
   },
@@ -93,7 +80,8 @@ async function mountServer() {
   try {
     await shell.resolveServer()
   } catch {
-    error.value = 'This server is unavailable. Open its server directly.'
+    error.value = 'This Server is unavailable. Connect it by address or open its own website.'
+    await navigateTo('/create')
   }
 }
 </script>
@@ -102,22 +90,20 @@ async function mountServer() {
   <main class="flex h-dvh overflow-hidden bg-default">
     <CommunityRail
       :groups="shell.groups.value"
-      :active-origin="shell.selected.value"
+      :active-origin="showCreate ? undefined : shell.selected.value"
       :active-server-id="
-        typeof route.params.serverId === 'string'
+        !showCreate && typeof route.params.serverId === 'string'
           ? route.params.serverId
           : undefined
       "
+      :add-active="showCreate"
       @server="openServer"
-      @group="openGroup"
-      @connections="connect"
       @connect="connect"
-      @install="navigateTo('/deploy')"
     />
     <section class="relative min-w-0 flex-1">
       <iframe
         v-for="origin in shell.loaded.value"
-        v-show="shell.selected.value === origin && !showDeploy"
+        v-show="shell.selected.value === origin && !showCreate"
         :key="origin"
         :ref="(element) => selectFrame(element, origin)"
         :src="shell.frameSrc(origin, ownOrigin)"
@@ -137,54 +123,10 @@ async function mountServer() {
         </p>
       </div>
       <div
-        v-else-if="showDeploy || !shell.selected.value"
+        v-else-if="showCreate || !shell.selected.value"
         class="absolute inset-0 overflow-y-auto bg-default"
       >
-        <ServerDeploy v-if="showDeploy" />
-        <UContainer v-else class="max-w-2xl py-10 sm:py-16">
-          <h1 class="text-2xl font-semibold">Connect a server</h1>
-          <p class="mt-3 text-muted">
-            Enter the address of the L4 you want to join. You’ll sign in there.
-          </p>
-          <form
-            class="mt-8 max-w-md space-y-4"
-            @submit.prevent="shell.submitAddress"
-          >
-            <UFormField label="Address"
-              ><UInput
-                v-model="shell.address.value"
-                placeholder="chat.example.com"
-                autocomplete="url"
-                required
-                class="w-full"
-            /></UFormField>
-            <UButton
-              type="submit"
-              label="Open"
-              :loading="shell.busy.value"
-              block
-            />
-          </form>
-          <UAlert
-            v-if="error"
-            class="mt-4"
-            color="error"
-            :description="error"
-          />
-          <ul v-if="shell.servers.value.length" class="mt-8 space-y-2">
-            <li
-              v-for="server in shell.servers.value"
-              :key="server.origin"
-            >
-              <UButton
-                :label="server.name"
-                color="neutral"
-                variant="outline"
-                @click="openGroup(server.origin)"
-              />
-            </li>
-          </ul>
-        </UContainer>
+        <ServerCreate />
       </div>
       <UAlert
         v-else-if="error"

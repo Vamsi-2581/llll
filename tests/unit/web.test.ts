@@ -36,7 +36,9 @@ it('surfaces Cloudflare refusal reason on the deploy page instead of a generic c
   const refused = '/api/deploy/callback?error=invalid_scope&error_description='
     + encodeURIComponent("The OAuth 2.0 Client is not allowed to request scope 'offline_access'.")
     + '&state=' + auth.searchParams.get('state')
-  expect((await web.fetch(req(refused, cookie), env)).status).toBe(303)
+  const callback = await web.fetch(req(refused, cookie), env)
+  expect(callback.status).toBe(303)
+  expect(callback.headers.get('location')).toBe(origin + '/create?tab=cloudflare')
   const session = await web.fetch(req('/api/deploy/session', cookie), env)
   expect(await session.text()).toContain('offline_access')
 })
@@ -62,9 +64,8 @@ it('binds OAuth to the browser, consumes callback state once, and stores credent
   const cookie = start.headers.get('set-cookie')!.split(';')[0]!
   const auth = new URL(start.headers.get('location')!)
   expect(auth.searchParams.get('code_challenge_method')).toBe('S256')
-  // These are the Workers scopes offered by Cloudflare's current client form.
-  // Every id below is probe-verified against the web OAuth client.
   const scopes = auth.searchParams.get('scope')!.split(' ')
+  expect(scopes).toEqual(expect.arrayContaining(['workers-ci.read', 'workers-ci.write']))
   expect(scopes).toEqual(expect.arrayContaining(['workers-scripts.content_read', 'workers-scripts.admin', 'offline_access', 'zone.read', 'dns.read', 'dns.write', 'email-routing-rule.read', 'email-routing-rule.write', 'email-sending.read', 'email-sending.write', 'browser-rendering.read', 'containers.read', 'containers.write', 'realtime.read', 'realtime.write', 'queues.read', 'queues.write']))
   expect(scopes).not.toContain('workers-scripts.read')
   expect(scopes).not.toContain('workers-scripts.write')
@@ -74,7 +75,9 @@ it('binds OAuth to the browser, consumes callback state once, and stores credent
     return Response.json({ success: true, result: [{ id: 'a'.repeat(32), name: 'My account' }] })
   }))
   const callback = '/api/deploy/callback?code=one&state=' + auth.searchParams.get('state')
-  expect((await web.fetch(req(callback, cookie), env)).status).toBe(303)
+  const authorized = await web.fetch(req(callback, cookie), env)
+  expect(authorized.status).toBe(303)
+  expect(authorized.headers.get('location')).toBe(origin + '/create?tab=cloudflare')
   expect((await web.fetch(req(callback, cookie), env)).status).toBe(400)
   const response = await web.fetch(req('/api/deploy/session', cookie), env)
   const text = await response.text()
@@ -83,6 +86,19 @@ it('binds OAuth to the browser, consumes callback state once, and stores credent
   expect((await webSession(req('/', cookie), env)).data.grant?.refreshToken).toBe('secret-refresh')
   const foreign = new Request(origin + '/api/deploy/start', { method: 'POST', headers: { Cookie: cookie, Origin: 'https://evil.example' }, body: '{}' })
   expect((await web.fetch(foreign, env)).status).toBe(403)
+})
+
+it('redirects old entry links on the current origin and preserves connection parameters', async () => {
+  for (const [path, expected] of [
+    ['/open/?server=https%3A%2F%2Fchat.example.com', '/create?server=https%3A%2F%2Fchat.example.com'],
+    ['/deploy/', '/create?tab=cloudflare'],
+    ['/deploy?method=vps', '/create?tab=vps'],
+    ['/servers', '/create'],
+  ]) {
+    const response = await web.fetch(req(path), env)
+    expect(response.status).toBe(307)
+    expect(response.headers.get('location')).toBe(origin + expected)
+  }
 })
 
 it('lists published releases for the deploy picker and pins the chosen version to the deployment', async () => {
@@ -96,6 +112,7 @@ it('lists published releases for the deploy picker and pins the chosen version t
     ])
     if (String(url).endsWith('/llll-cloudflare-manifest.json')) return Response.json({version:new URL(String(url)).pathname.split('/').at(-2)!.slice(1),capabilities:['llll-server-schema-v1']})
     if (String(url).endsWith('/oauth2/token')) return Response.json({ access_token: 'secret-access', refresh_token: 'secret-refresh', expires_in: 3600 })
+    if (String(url).endsWith('/builds/tokens')) return Response.json({ success: true, result: [{ build_token_uuid: 'build-token' }] })
     return Response.json({ success: true, result: [{ id: 'a'.repeat(32), name: 'My account' }] })
   }))
   const listing = await web.fetch(req('/api/deploy/releases'), env)
@@ -115,6 +132,32 @@ it('lists published releases for the deploy picker and pins the chosen version t
   expect((await session.json()).version).toBe('v0.3.1')
   const state = await (await web.fetch(req('/api/deploy/session', cookie), env)).json() as { grantExpiresIn?: number }
   expect(state.grantExpiresIn).toBeGreaterThan(0)
+})
+
+it('rejects missing Builds permissions before starting and allows retry after reconnecting', async () => {
+  let buildsAllowed = false
+  const calls: string[] = []
+  vi.stubGlobal('fetch', vi.fn(async (url: string, options?: RequestInit) => {
+    calls.push(`${options?.method || 'GET'} ${url}`)
+    if (url.endsWith('/oauth2/token')) return Response.json({ access_token: 'secret-access', refresh_token: 'secret-refresh', expires_in: 3600 })
+    if (url.endsWith('/builds/tokens')) return buildsAllowed
+      ? Response.json({ success: true, result: [{ build_token_uuid: 'build-token' }] })
+      : Response.json({ success: false, errors: [{ code: 10000, message: 'Authentication error' }] }, { status: 403 })
+    return Response.json({ success: true, result: [{ id: 'a'.repeat(32), name: 'My account' }] })
+  }))
+  const start = await web.fetch(req('/api/deploy/oauth'), env)
+  const cookie = start.headers.get('set-cookie')!.split(';')[0]!
+  const auth = new URL(start.headers.get('location')!)
+  await web.fetch(req('/api/deploy/callback?code=one&state=' + auth.searchParams.get('state'), cookie), env)
+  const body = { ownerEmail: 'owner@example.com', accountId: 'a'.repeat(32), name: 'Community', version: 'v0.2.0-alpha.1' }
+  const denied = await web.fetch(req('/api/deploy/start', cookie, body), env)
+  expect(denied.status).toBe(403)
+  expect(await denied.text()).toContain('Reconnect Cloudflare')
+  expect((await webSession(req('/', cookie), env)).data.worker).toBeUndefined()
+  expect(calls.some(call => call.includes('/workers/workers') && call.startsWith('POST'))).toBe(false)
+  buildsAllowed = true
+  expect((await web.fetch(req('/api/deploy/start', cookie, body), env)).status).toBe(200)
+  expect((await webSession(req('/', cookie), env)).data.buildTokenId).toBe('build-token')
 })
 
 it('requires an server proof and prevents directory ownership replacement', async () => {
