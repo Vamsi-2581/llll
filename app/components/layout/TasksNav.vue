@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { useQuery } from '@tanstack/vue-query'
+import { Permission } from '~~/shared/permissions'
 import type { TaskBoardDTO } from '~~/shared/types'
 import { boardPath } from '~~/shared/paths'
 
@@ -7,6 +8,7 @@ const props = defineProps<{ serverId: string }>()
 const route = useRoute()
 const { api } = useApi()
 const nav = useNavActions()
+const { can } = useRoleGrants()
 
 const archived = computed(() => route.query.archived === '1')
 const boardsQ = useQuery({
@@ -27,16 +29,17 @@ const activeBoardId = computed(() => String(route.query.board || '') || boards.v
     <LayoutNavSection
       label="Boards"
       collapse-key="tasks:boards"
-      :create-label="archived ? undefined : 'Create board'"
+      :create-label="!archived && can(Permission.manageTasks) ? 'Create board' : undefined"
       @create="nav.createBoardOpen.value = true"
     >
       <LayoutSkeleton v-if="boardsQ.isPending.value" variant="nav" :rows="3" />
+      <LayoutLoadError v-else-if="boardsQ.error.value" inline message="Boards did not load." :retry="boardsQ.refetch" />
       <p v-else-if="!boards.length" class="px-2 py-3 text-sm text-muted">
         {{ archived ? 'Nothing archived.' : 'No boards yet.' }}
       </p>
       <ul v-else>
         <li v-for="board in boards" :key="board.id">
-          <LayoutNavRow :to="boardPath(board.id, archived)" :active="board.id === activeBoardId">
+          <LayoutNavRow :to="boardPath(board.id, archived)" :title="board.name" :active="board.id === activeBoardId">
             <template #leading>
               <UIcon name="i-ph-kanban" class="size-[18px] shrink-0 text-dimmed" />
             </template>

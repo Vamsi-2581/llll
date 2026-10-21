@@ -5,15 +5,15 @@ import type { ChannelCategoryDTO as Category, ChannelDTO as Ch, MailboxDTO, Serv
 import { Permission } from '~~/shared/permissions'
 import { channelPath, mailPath } from '~~/shared/paths'
 import { useClipboard } from '@vueuse/core'
+import { hasServerNavigationMenu, serverNavigationSection } from '~~/shared/server-navigation'
 import { publicIconPath } from '~~/shared/server-appearance'
 
-type Mode = 'chat' | 'tasks' | 'mail' | 'databases' | 'gadgets' | 'schedules'
-
 const props = defineProps<{ serverId: string }>()
+const emit = defineEmits<{ selectSection: [path: string]; selectResource: [navigates: boolean] }>()
+const ui = useUiStore()
 const route = useRoute()
 const qc = useQueryClient()
 const toast = useToast()
-const ui = useUiStore()
 const session = useSessionStore()
 const live = useLiveStore()
 const nav = useNavActions()
@@ -55,40 +55,45 @@ const connectedPath = computed(() => {
   return conversation ? channelPath(conversation) : `/channels/${id}`
 })
 
-/** The mode is read off the route, so a deep link lands in the right one. */
-const mode = computed<Mode>(() => {
-  if (route.path.startsWith('/schedules')) return 'schedules'
-  if (route.path.startsWith('/tasks')) return 'tasks'
-  if (route.path.startsWith('/mail')) return 'mail'
-  if (route.path.startsWith('/databases')) return 'databases'
-  if (route.path.startsWith('/documents')) return 'databases'
-  if (route.path.startsWith('/canvases')) return 'databases'
-  if (route.path.startsWith('/gadgets')) return 'gadgets'
-  return 'chat'
-})
-
+const { unreadConversations } = useInbox(computed(() => props.serverId))
+const section = computed(() => serverNavigationSection(route.path))
+const hasMenu = computed(() => hasServerNavigationMenu(route.path))
 const chatUnread = computed(() => [...channels.value, ...(dmsQ.data.value?.channels ?? [])].some(channel => channel.unread))
-const mailUnread = computed(() => mailboxes.value.some(mailbox => mailbox.unreadCount > 0))
-
 const chatTarget = computed(() => {
   const last = ui.last()
   return last?.serverId === props.serverId ? channelPath(last.channelId) : '/channels'
 })
-
+const mailUnread = computed(() => mailboxes.value.some(mailbox => mailbox.unreadCount > 0))
 const mailTarget = computed(() => {
   const first = mailboxes.value[0]
   return first ? mailPath(first.channelId) : '/mail'
 })
-
-const modes = computed(() => [
-  { value: 'chat' as const, label: 'Chat', icon: 'i-ph-chat-circle', to: chatTarget.value, dot: chatUnread.value },
-  ...(can(Permission.readTasks) ? [{ value: 'tasks' as const, label: 'Tasks', icon: 'i-ph-kanban', to: '/tasks', dot: false }] : []),
-  ...(can(Permission.manageSchedules) ? [{ value: 'schedules' as const, label: 'Schedules', icon: 'i-ph-clock', to: '/schedules', dot: false }] : []),
-  { value: 'mail' as const, label: 'Mail', icon: 'i-ph-envelope-simple', to: mailTarget.value, dot: mailUnread.value },
-  ...(can(Permission.readData) ? [{ value: 'databases' as const, label: 'Data', icon: 'i-ph-table', to: '/databases', dot: false }] : []),
-  ...(can(Permission.useGadgets) || can(Permission.manageGadgets) ? [{ value: 'gadgets' as const, label: 'Apps', icon: 'i-ph-squares-four', to: '/gadgets', dot: false }] : []),
+const dataView = computed(() => {
+  if (route.path === '/databases') return 'databases'
+  if (route.path === '/documents') return 'documents'
+  if (route.path === '/canvases') return 'canvases'
+  return null
+})
+const views = computed(() => [
+  { label: 'Inbox', icon: 'i-ph-tray', to: '/inbox', path: '/inbox', count: unreadConversations.value.length, dot: false },
+  { label: 'Chat', icon: 'i-ph-chat-circle', to: chatTarget.value, path: '/channels', count: 0, dot: chatUnread.value },
+  ...(can(Permission.readTasks) ? [{ label: 'Tasks', icon: 'i-ph-kanban', to: '/tasks', path: '/tasks', count: 0, dot: false }] : []),
+  ...(can(Permission.manageSchedules) ? [{ label: 'Schedule', icon: 'i-ph-calendar-blank', to: '/schedules', path: '/schedules', count: 0, dot: false }] : []),
+  { label: 'Mail', icon: 'i-ph-envelope-simple', to: mailTarget.value, path: '/mail', count: 0, dot: mailUnread.value },
+  ...(can(Permission.readData) ? [
+    { label: 'Databases', icon: 'i-ph-table', to: '/databases', path: '/databases', count: 0, dot: false },
+    { label: 'Documents', icon: 'i-ph-file-text', to: '/documents', path: '/documents', count: 0, dot: false },
+    { label: 'Canvases', icon: 'i-ph-selection-background', to: '/canvases', path: '/canvases', count: 0, dot: false },
+  ] : []),
+  ...(can(Permission.useGadgets) || can(Permission.manageGadgets) ? [{ label: 'Apps', icon: 'i-ph-squares-four', to: '/gadgets', path: '/gadgets', count: 0, dot: false }] : []),
 ])
-
+function isViewActive(path: string) {
+  return section.value === serverNavigationSection(path)
+}
+function selectResource(event: MouseEvent) {
+  emit('selectResource', event.target instanceof Element && Boolean(event.target.closest('a[href]')))
+}
+const menuTitle = computed(() => views.value.find(view => isViewActive(view.path))?.label || '')
 function leaveLiveOnPageExit() {
   if (!live.currentChannelId || live.connection !== 'connected') return
   navigator.sendBeacon?.(`/api/channels/${live.currentChannelId}/live/leave`)
@@ -228,74 +233,75 @@ watch(nav.inviteOpen, (open) => {
 </script>
 
 <template>
-  <div class="flex h-full min-h-0 select-none flex-col">
-    <UDropdownMenu :items="serverItems" :ui="{ content: 'w-56' }">
-      <button
-        type="button"
-        class="flex h-12 w-full shrink-0 items-center gap-1.5 px-3 shadow-[0_1px_0_var(--ui-border)] hover:bg-elevated/70"
-        :aria-label="serverName || 'Server menu'"
-      >
-        <UAvatar v-if="serverIconUrl" size="sm" :src="serverIconUrl" :alt="serverName" class="rounded-md" />
-        <BrandLogo v-else size="lg" :alt="serverName" class="rounded-md" />
-        <span v-if="serverName" class="min-w-0 flex-1 truncate text-start text-sm font-semibold text-highlighted">{{ serverName }}</span>
-        <span v-else class="min-w-0 flex-1"><USkeleton class="h-3.5 w-24" /></span>
-        <UIcon name="i-ph-caret-down" class="size-4 shrink-0 text-muted" />
-      </button>
-    </UDropdownMenu>
-
-    <nav
-      class="l4-segmented-track m-2 grid shrink-0"
-      :class="modes.length > 5 ? 'grid-cols-3' : 'grid-flow-col auto-cols-fr'"
-      aria-label="App"
-    >
-      <!-- Which apps show depends on permissions; hold their place until they are known. -->
-      <template v-if="membersQ.isPending.value">
-        <div v-for="index in 5" :key="index" class="flex h-[46px] flex-col items-center justify-center gap-1.5 rounded-md">
-          <USkeleton class="size-[18px] rounded bg-accented" />
-          <USkeleton class="h-2 w-7 bg-accented" />
-        </div>
-      </template>
-      <template v-else>
-        <NuxtLink
-          v-for="item in modes"
-          :key="item.value"
-          :to="item.to"
-          class="l4-segmented-item relative flex flex-col items-center gap-0.5 py-1.5 text-[11px]"
-          :aria-current="mode === item.value ? 'page' : undefined"
+  <div class="flex h-full min-h-0 w-full select-none">
+    <div class="flex w-[72px] shrink-0 flex-col border-e border-default bg-muted">
+      <UDropdownMenu :items="serverItems" :ui="{ content: 'w-56' }">
+        <button
+          type="button"
+          class="flex h-12 w-full shrink-0 items-center justify-center hover:bg-elevated/70 focus-visible:outline-2 focus-visible:outline-primary"
+          :aria-label="serverName || 'Server menu'"
+          :title="serverName || 'Server menu'"
         >
-          <UIcon :name="item.icon" class="size-[18px]" />
-          <span>{{ item.label }}</span>
-          <span
-            v-if="item.dot && mode !== item.value"
-            class="absolute end-[calc(50%-15px)] top-1 size-1.5 rounded-full bg-primary"
-            aria-hidden="true"
-          />
-        </NuxtLink>
-      </template>
-    </nav>
+          <UAvatar v-if="serverIconUrl" size="sm" :src="serverIconUrl" :alt="serverName" class="rounded-md" />
+          <BrandLogo v-else size="lg" :alt="serverName" class="rounded-md" />
+        </button>
+      </UDropdownMenu>
 
-    <div class="flex-1 overflow-y-auto pb-2">
-      <LayoutChatNav v-if="mode === 'chat'" :server-id="serverId" />
-      <LayoutTasksNav v-else-if="mode === 'tasks'" :server-id="serverId" />
-      <LayoutDatabasesNav v-else-if="mode === 'databases'" :server-id="serverId" />
-      <LayoutGadgetsNav v-else-if="mode === 'gadgets'" :server-id="serverId" />
-      <div v-else-if="mode === 'schedules'" class="flex-1" />
-      <LayoutMailNav v-else />
+      <nav aria-label="Server views" class="min-h-0 flex-1 overflow-y-auto overscroll-contain px-1 py-2">
+        <div v-if="membersQ.isPending.value" class="space-y-1" aria-label="Loading views" aria-busy="true">
+          <div v-for="index in 9" :key="index" class="flex h-14 flex-col items-center justify-center gap-1.5"><USkeleton class="size-5" /><USkeleton class="h-2 w-10" /></div>
+        </div>
+        <UButton v-else-if="membersQ.error.value" icon="i-ph-arrow-clockwise" color="neutral" variant="ghost" aria-label="Retry loading views" class="h-14 w-full justify-center" @click="membersQ.refetch()" />
+        <ul v-else class="space-y-1">
+          <li v-for="item in views" :key="item.path">
+            <NuxtLink
+              :to="item.to"
+              :title="item.label"
+              :aria-current="isViewActive(item.path) ? 'page' : undefined"
+              :aria-label="item.count ? `${item.label}, ${item.count} unread conversations` : item.dot ? `${item.label}, unread` : item.label"
+              class="relative flex h-14 w-full flex-col items-center justify-center gap-1 rounded-lg px-0.5 focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-primary"
+              :class="isViewActive(item.path) ? 'bg-accented text-highlighted' : 'text-muted hover:bg-elevated hover:text-default'"
+              @click="emit('selectSection', item.path)"
+            >
+              <UIcon :name="item.icon" class="size-[22px] shrink-0" />
+              <span class="max-w-full truncate text-[11px] font-medium leading-3">{{ item.label }}</span>
+              <span v-if="item.count" class="absolute end-1 top-1 min-w-4 rounded-full bg-primary px-1 text-center text-[10px] leading-4 text-inverted" aria-hidden="true">{{ item.count > 99 ? '99+' : item.count }}</span>
+              <span v-else-if="item.dot" class="absolute end-3 top-1.5 size-1.5 rounded-full bg-primary" aria-hidden="true" />
+            </NuxtLink>
+          </li>
+        </ul>
+      </nav>
+      <button v-if="!hasMenu && live.connection === 'connected' && live.currentChannelId" type="button" class="mx-2 mb-2 flex h-11 items-center justify-center rounded-md text-success hover:bg-elevated" :aria-label="`Return to ${live.currentTitle || 'live conversation'}`" @click="navigateTo(connectedPath)"><UIcon :name="live.currentKind === 'call' ? 'i-ph-phone' : 'i-ph-waveform'" class="size-5" /></button>
+      <LayoutUserPanel v-if="!hasMenu" compact />
     </div>
 
-    <button
-      v-if="live.connection === 'connected' && live.currentChannelId"
-      type="button"
-      class="mx-2 mb-0 rounded-lg bg-success/10 px-3 py-2 text-start hover:bg-success/15"
-      @click="navigateTo(connectedPath)"
-    >
-      <p class="flex items-center gap-1.5 text-xs font-semibold text-success">
-        <UIcon :name="live.currentKind === 'call' ? 'i-ph-phone' : 'i-ph-waveform'" class="size-3.5" />
-        Connected
-      </p>
-      <p class="truncate text-[11px] text-muted">{{ live.currentTitle || 'Live' }}</p>
-    </button>
-    <LayoutUserPanel />
+    <div v-if="hasMenu" class="flex min-h-0 min-w-0 flex-1 flex-col bg-muted" @click.capture="selectResource">
+      <header class="flex h-12 shrink-0 items-center gap-2 border-b border-default px-3">
+        <h2 class="min-w-0 flex-1 truncate text-sm font-semibold text-highlighted">{{ menuTitle }}</h2>
+        <UButton icon="i-ph-x" color="neutral" variant="ghost" class="size-9 justify-center md:hidden" aria-label="Close navigation" @click="ui.mobilePane = 'chat'" />
+      </header>
+      <div class="min-h-0 flex-1 overflow-y-auto overscroll-contain py-3">
+        <nav v-if="section === 'chat'" aria-label="Conversations" class="space-y-4">
+          <LayoutChatNav :server-id="serverId" />
+          <LayoutDirectMessages :server-id="serverId" kind="human" />
+          <LayoutDirectMessages :server-id="serverId" kind="agent" />
+        </nav>
+        <LayoutTasksNav v-else-if="section === 'tasks' && can(Permission.readTasks)" :server-id="serverId" />
+        <LayoutDatabasesNav v-else-if="dataView && can(Permission.readData)" :server-id="serverId" :view="dataView" />
+        <LayoutGadgetsNav v-else-if="section === 'gadgets' && (can(Permission.useGadgets) || can(Permission.manageGadgets))" :server-id="serverId" />
+        <LayoutMailNav v-else-if="section === 'mail'" />
+      </div>
+      <button
+        v-if="live.connection === 'connected' && live.currentChannelId"
+        type="button"
+        class="mx-2 mb-0 rounded-lg bg-success/10 px-3 py-2 text-start hover:bg-success/15"
+        @click="navigateTo(connectedPath)"
+      >
+        <p class="flex items-center gap-1.5 text-xs font-semibold text-success"><UIcon :name="live.currentKind === 'call' ? 'i-ph-phone' : 'i-ph-waveform'" class="size-3.5" />Connected</p>
+        <p class="truncate text-[11px] text-muted">{{ live.currentTitle || 'Live' }}</p>
+      </button>
+      <LayoutUserPanel />
+    </div>
     <SettingsServerSettings v-if="canOpenServerSettings" v-model:open="nav.serverSettingsOpen.value" v-model:section="nav.serverSettingsSection.value" :server-id="serverId" />
 
     <UModal v-model:open="nav.createChannelOpen.value" title="Create Channel">
