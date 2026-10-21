@@ -29,6 +29,7 @@ export type AuthorizationContext = {
     kind: CredentialKind
     id?: string
     scopes?: McpScope[]
+    clientId?: string
   }
   delegation?: {
     by: string
@@ -48,7 +49,7 @@ const ACTION_RULES: Record<ServerAction, ActionRule> = {
   [ServerAction.writeDocuments]: { permission: Permission.manageDatabases, scope: 'documents:write' },
   [ServerAction.useGadgets]: { permission: Permission.useGadgets },
   [ServerAction.manageGadgets]: { permission: Permission.manageGadgets },
-  [ServerAction.sendMessages]: { permission: Permission.sendMessages },
+  [ServerAction.sendMessages]: { permission: Permission.sendMessages, scope: 'messages:write' },
 }
 
 export class AuthorizationError extends Error {
@@ -64,8 +65,20 @@ export class AuthorizationError extends Error {
   }
 }
 
+/** Credential limits are separate from channel-specific permissions and DM rules. */
+export function authorizeMcpCredential(context: AuthorizationContext, scope?: McpScope): void {
+  if (context.credential.kind !== 'mcp') return
+  if (!context.principal.isOwner && !hasPermission(context.principal.permissions, Permission.mcpConnect)) {
+    throw new AuthorizationError(`The ${context.principal.roleName} role cannot perform mcp.connect`)
+  }
+  if (scope && !context.credential.scopes?.includes(scope)) {
+    throw new AuthorizationError(`Access token is missing the ${scope} scope`)
+  }
+}
+
 /** The single server authorization boundary shared by HTTP, MCP, and Agents. */
 export function authorize(context: AuthorizationContext, action: ServerAction): void {
+  authorizeMcpCredential(context)
   const rule = ACTION_RULES[action]
   const delegatedAuthority = context.credential.kind === 'agent_runtime' && context.delegation?.permissions !== undefined
     ? {
@@ -77,9 +90,7 @@ export function authorize(context: AuthorizationContext, action: ServerAction): 
   if (!delegatedAuthority.isOwner && !hasPermission(delegatedAuthority.permissions, rule.permission)) {
     throw new AuthorizationError(`The ${delegatedAuthority.roleName} role cannot perform ${action}`)
   }
-  if (context.credential.kind === 'mcp' && rule.scope && !context.credential.scopes?.includes(rule.scope)) {
-    throw new AuthorizationError(`Access token is missing the ${rule.scope} scope`)
-  }
+  authorizeMcpCredential(context, rule.scope)
   if (context.delegation?.actions && !context.delegation.actions.includes(action)) {
     throw new AuthorizationError(`The delegated Agent cannot perform ${action}`)
   }
@@ -90,6 +101,7 @@ export function auditAttribution(context: AuthorizationContext): Record<string, 
     principalKind: context.principal.kind,
     credentialKind: context.credential.kind,
     ...(context.credential.id ? { credentialId: context.credential.id } : {}),
+    ...(context.credential.clientId ? { clientId: context.credential.clientId } : {}),
     ...(context.delegation?.by ? { delegatedBy: context.delegation.by } : {}),
   }
 }

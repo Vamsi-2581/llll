@@ -2,6 +2,8 @@
 import { drizzle } from 'drizzle-orm/d1'
 import baselineSql from '../../drizzle/server-migrations/0000_server_baseline.sql?raw'
 import serverUpdatesSql from '../../drizzle/server-migrations/0001_server_updates.sql?raw'
+import mcpOauthSql from '../../drizzle/server-migrations/0002_mcp_oauth.sql?raw'
+import mcpConnectSql from '../../drizzle/server-migrations/0003_mcp_connect_grant.sql?raw'
 import { schema } from '../../drizzle/schema'
 
 export function getDb(d1: D1Database) {
@@ -26,6 +28,8 @@ export function d1ExecSql(sql: string): string {
 export const INIT_SQL = d1ExecSql([
   baselineSql,
   serverUpdatesSql,
+  mcpOauthSql,
+  mcpConnectSql,
 ].join('\n--> statement-breakpoint\n'))
 
 /** Bootstrap is only for an empty database. Deployed changes use D1 migrations. */

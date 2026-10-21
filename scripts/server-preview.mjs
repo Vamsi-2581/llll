@@ -71,8 +71,13 @@ async function api(path, method = 'GET', body) {
     throw new Error(`Cloudflare administration failed (${r.status}): ${path}`)
   return d.result
 }
-let db = (await api('/d1/database?per_page=100')).find((d) => d.name === name)
-db ||= await api('/d1/database', 'POST', { name })
+// A fresh isolated database can replace an obsolete, unmerged PR schema.
+// The original database and backup bucket remain available for inspection.
+const databaseName = process.env.LLLL_PREVIEW_DATABASE || name
+if (databaseName !== name && !new RegExp(`^${name}-[a-z0-9]+(?:-[a-z0-9]+)*$`).test(databaseName))
+  throw new Error('Preview database must belong to this PR')
+let db = (await api('/d1/database?per_page=100')).find((d) => d.name === databaseName)
+db ||= await api('/d1/database', 'POST', { name: databaseName })
 for (const bucket of [name + '-files', name + '-backups']) {
   const listed = await api('/r2/buckets?name_contains=' + bucket)
   if (!listed.buckets.some((b) => b.name === bucket))
@@ -102,7 +107,7 @@ Object.assign(config, {
   d1_databases: [
     {
       binding: 'DB',
-      database_name: name,
+      database_name: databaseName,
       database_id: db.uuid,
       migrations_dir: resolve(root, 'drizzle/server-migrations'),
     },

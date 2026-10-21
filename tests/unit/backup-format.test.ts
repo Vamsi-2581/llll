@@ -165,6 +165,10 @@ describe('backup format', () => {
         INSERT INTO documents (id, title, content, created_by) VALUES ('doc', 'Plan', '<p>Hello</p>', 'owner');
         INSERT INTO canvases (id, title, created_by) VALUES ('canvas', 'Launch', 'owner');
         INSERT INTO canvas_nodes (id, canvas_id, content, created_by) VALUES ('node', 'canvas', 'Start', 'owner');
+        INSERT INTO auth_oauth_client (id,client_id,redirect_uris) VALUES ('oauth-client-row','oauth-client','["https://client.example/callback"]');
+        INSERT INTO auth_oauth_resource (id,identifier,name) VALUES ('oauth-resource','https://server.example/mcp','MCP');
+        INSERT INTO auth_oauth_client_resource (id,client_id,resource_id) VALUES ('oauth-link','oauth-client','https://server.example/mcp');
+        INSERT INTO auth_oauth_access_token (id,token,client_id,expires_at,created_at,scopes) VALUES ('oauth-token','token-digest','oauth-client',9999999999999,1,'["tasks:read"]');
       `)
       const updateState = { ...emptyUpdateRecord(), hook: { ciphertext: 'encrypted-hook', iv: 'iv', version: 1 }, job: { stage: 'backing_up' }, backupToken: 'single-job-capability', backupBusy: true }
       source.prepare('INSERT INTO server_update_control VALUES (1, 9, ?)').run(JSON.stringify(updateState))
@@ -199,6 +203,8 @@ describe('backup format', () => {
       restored.exec(sql)
       restored.exec('COMMIT;')
       expect(restored.prepare('PRAGMA foreign_key_check').all()).toEqual([])
+      expect(restored.prepare('SELECT client_id FROM auth_oauth_access_token WHERE id=?').get('oauth-token')).toEqual({ client_id: 'oauth-client' })
+      expect(restored.prepare('SELECT resource_id FROM auth_oauth_client_resource WHERE id=?').get('oauth-link')).toEqual({ resource_id: 'https://server.example/mcp' })
       const control = restored.prepare('SELECT payload, revision FROM server_update_control').get()!
       expect(control.revision).toBe(1)
       expect(JSON.parse(String(control.payload))).toEqual({ ...emptyUpdateRecord(), hook: updateState.hook })

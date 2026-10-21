@@ -5,9 +5,40 @@ export const MCP_SCOPES = [
   'tasks:write',
   'documents:read',
   'documents:write',
+  'messages:read',
+  'messages:write',
 ] as const
 
 export type McpScope = typeof MCP_SCOPES[number]
+
+export const MCP_SCOPE_LABELS: Record<McpScope, string> = {
+  'tasks:read': 'Read tasks',
+  'tasks:write': 'Create and update tasks',
+  'documents:read': 'Read documents',
+  'documents:write': 'Create and update documents',
+  'messages:read': 'Read accessible chats, messages and members',
+  'messages:write': 'Send messages and mention members in accessible chats',
+}
+
+export type McpConnectionDTO = {
+  id: string
+  clientId: string
+  clientName: string
+  subject: PublicUser
+  createdBy: string
+  scopes: McpScope[]
+  createdAt: string
+  lastUsedAt: string | null
+}
+
+export type McpConsentDTO = {
+  clientName: string
+  clientId: string
+  redirectUri: string
+  scopes: McpScope[]
+  offlineAccess: boolean
+  subjects: Array<PublicUser & { scopes: McpScope[] }>
+}
 
 export type McpAccessTokenDTO = {
   id: string
