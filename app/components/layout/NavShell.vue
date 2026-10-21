@@ -7,7 +7,7 @@ import { channelPath, mailPath } from '~~/shared/paths'
 import { useClipboard } from '@vueuse/core'
 import { publicIconPath } from '~~/shared/server-appearance'
 
-type Mode = 'chat' | 'tasks' | 'mail' | 'databases' | 'gadgets'
+type Mode = 'chat' | 'tasks' | 'mail' | 'databases' | 'gadgets' | 'schedules'
 
 const props = defineProps<{ serverId: string }>()
 const route = useRoute()
@@ -57,6 +57,7 @@ const connectedPath = computed(() => {
 
 /** The mode is read off the route, so a deep link lands in the right one. */
 const mode = computed<Mode>(() => {
+  if (route.path.startsWith('/schedules')) return 'schedules'
   if (route.path.startsWith('/tasks')) return 'tasks'
   if (route.path.startsWith('/mail')) return 'mail'
   if (route.path.startsWith('/databases')) return 'databases'
@@ -81,9 +82,10 @@ const mailTarget = computed(() => {
 
 const modes = computed(() => [
   { value: 'chat' as const, label: 'Chat', icon: 'i-ph-chat-circle', to: chatTarget.value, dot: chatUnread.value },
-  ...(can(Permission.manageTasks) ? [{ value: 'tasks' as const, label: 'Tasks', icon: 'i-ph-kanban', to: '/tasks', dot: false }] : []),
+  ...(can(Permission.readTasks) ? [{ value: 'tasks' as const, label: 'Tasks', icon: 'i-ph-kanban', to: '/tasks', dot: false }] : []),
+  ...(can(Permission.manageSchedules) ? [{ value: 'schedules' as const, label: 'Schedules', icon: 'i-ph-clock', to: '/schedules', dot: false }] : []),
   { value: 'mail' as const, label: 'Mail', icon: 'i-ph-envelope-simple', to: mailTarget.value, dot: mailUnread.value },
-  ...(can(Permission.manageDatabases) ? [{ value: 'databases' as const, label: 'Data', icon: 'i-ph-table', to: '/databases', dot: false }] : []),
+  ...(can(Permission.readData) ? [{ value: 'databases' as const, label: 'Data', icon: 'i-ph-table', to: '/databases', dot: false }] : []),
   ...(can(Permission.useGadgets) || can(Permission.manageGadgets) ? [{ value: 'gadgets' as const, label: 'Apps', icon: 'i-ph-squares-four', to: '/gadgets', dot: false }] : []),
 ])
 
@@ -242,7 +244,8 @@ watch(nav.inviteOpen, (open) => {
     </UDropdownMenu>
 
     <nav
-      class="l4-segmented-track m-2 grid shrink-0 grid-flow-col auto-cols-fr"
+      class="l4-segmented-track m-2 grid shrink-0"
+      :class="modes.length > 5 ? 'grid-cols-3' : 'grid-flow-col auto-cols-fr'"
       aria-label="App"
     >
       <!-- Which apps show depends on permissions; hold their place until they are known. -->
@@ -276,6 +279,7 @@ watch(nav.inviteOpen, (open) => {
       <LayoutTasksNav v-else-if="mode === 'tasks'" :server-id="serverId" />
       <LayoutDatabasesNav v-else-if="mode === 'databases'" :server-id="serverId" />
       <LayoutGadgetsNav v-else-if="mode === 'gadgets'" :server-id="serverId" />
+      <div v-else-if="mode === 'schedules'" class="flex-1" />
       <LayoutMailNav v-else />
     </div>
 
