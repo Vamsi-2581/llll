@@ -6,7 +6,7 @@ import type { WebEnv } from '../../apps/site/src/env'
 import { listL4Servers } from '../../packages/deployment-core/src/servers'
 import { webSession } from '../../apps/site/src/session'
 
-vi.mock('../../packages/deployment-core/src/servers', () => ({ listL4Servers: vi.fn() }))
+vi.mock('../../packages/deployment-core/src/servers', () => ({ listL4Servers: vi.fn(), readL4Server: vi.fn() }))
 
 let sqlite: DatabaseSync
 let env: WebEnv
@@ -84,7 +84,8 @@ it('binds OAuth to the browser, consumes callback state once, and stores credent
   const auth = new URL(start.headers.get('location')!)
   expect(auth.searchParams.get('code_challenge_method')).toBe('S256')
   const scopes = auth.searchParams.get('scope')!.split(' ')
-  expect(scopes).toEqual(expect.arrayContaining(['workers-ci.read', 'workers-ci.write']))
+  expect(scopes).not.toContain('workers-ci.read')
+  expect(scopes).not.toContain('workers-ci.write')
   expect(scopes).toEqual(expect.arrayContaining(['workers-scripts.content_read', 'workers-scripts.admin', 'offline_access', 'zone.read', 'dns.read', 'dns.write', 'email-routing-rule.read', 'email-routing-rule.write', 'email-sending.read', 'email-sending.write', 'browser-rendering.read', 'containers.read', 'containers.write', 'realtime.read', 'realtime.write', 'queues.read', 'queues.write']))
   expect(scopes).not.toContain('workers-scripts.read')
   expect(scopes).not.toContain('workers-scripts.write')
@@ -105,6 +106,29 @@ it('binds OAuth to the browser, consumes callback state once, and stores credent
   expect((await webSession(req('/', cookie), env)).data.grant?.refreshToken).toBe('secret-refresh')
   const foreign = new Request(origin + '/api/deploy/start', { method: 'POST', headers: { Cookie: cookie, Origin: 'https://evil.example' }, body: '{}' })
   expect((await web.fetch(foreign, env)).status).toBe(403)
+})
+
+it('remembers an update target without a Cloudflare grant and preserves it across OAuth', async () => {
+  const target = { origin: 'https://server.example', accountId: 'a'.repeat(32), workerName: 'worker', jobId: '22222222-2222-4222-8222-222222222222' }
+  const prepare = await web.fetch(req('/api/deploy/update/prepare', '', target), env)
+  expect(prepare.status).toBe(200)
+  const prepared = await prepare.json() as { remembered?: boolean }
+  expect(prepared.remembered).toBe(true)
+  const cookie = prepare.headers.get('set-cookie')!.split(';')[0]!
+  const session = await (await web.fetch(req('/api/deploy/session', cookie), env)).json() as { updateRequest?: { origin: string; jobId: string } }
+  expect(session.updateRequest).toMatchObject({ origin: target.origin, jobId: target.jobId })
+  expect((await web.fetch(req('/api/deploy/update/advance', cookie, {}), env)).status).toBe(409)
+  const start = await web.fetch(req('/api/deploy/oauth', cookie), env)
+  const auth = new URL(start.headers.get('location')!)
+  vi.stubGlobal('fetch', vi.fn(async (url: string) => String(url).endsWith('/oauth2/token')
+    ? Response.json({ access_token: 'secret-access', refresh_token: 'secret-refresh', expires_in: 3600 })
+    : Response.json({ success: true, result: [{ id: 'a'.repeat(32), name: 'My account' }] })))
+  const callback = await web.fetch(req('/api/deploy/callback?code=one&state=' + auth.searchParams.get('state'), cookie), env)
+  expect(callback.status).toBe(303)
+  expect(callback.headers.get('location')).toBe(origin + '/create?tab=cloudflare&resume=update')
+  expect((await web.fetch(req('/api/deploy/update/forget', cookie, {}), env)).status).toBe(200)
+  const after = await (await web.fetch(req('/api/deploy/session', cookie), env)).json() as { updateRequest?: unknown }
+  expect(after.updateRequest).toBeUndefined()
 })
 
 it('redirects old entry links on the current origin and preserves connection parameters', async () => {
@@ -142,7 +166,6 @@ it('lists published releases for the deploy picker and pins the chosen version t
     ])
     if (String(url).endsWith('/llll-cloudflare-manifest.json')) return Response.json({version:new URL(String(url)).pathname.split('/').at(-2)!.slice(1),capabilities:['llll-server-schema-v1']})
     if (String(url).endsWith('/oauth2/token')) return Response.json({ access_token: 'secret-access', refresh_token: 'secret-refresh', expires_in: 3600 })
-    if (String(url).endsWith('/builds/tokens')) return Response.json({ success: true, result: [{ build_token_uuid: 'build-token' }] })
     return Response.json({ success: true, result: [{ id: 'a'.repeat(32), name: 'My account' }] })
   }))
   const listing = await web.fetch(req('/api/deploy/releases'), env)
@@ -162,32 +185,6 @@ it('lists published releases for the deploy picker and pins the chosen version t
   expect((await session.json()).version).toBe('v0.3.1')
   const state = await (await web.fetch(req('/api/deploy/session', cookie), env)).json() as { grantExpiresIn?: number }
   expect(state.grantExpiresIn).toBeGreaterThan(0)
-})
-
-it('rejects missing Builds permissions before starting and allows retry after reconnecting', async () => {
-  let buildsAllowed = false
-  const calls: string[] = []
-  vi.stubGlobal('fetch', vi.fn(async (url: string, options?: RequestInit) => {
-    calls.push(`${options?.method || 'GET'} ${url}`)
-    if (url.endsWith('/oauth2/token')) return Response.json({ access_token: 'secret-access', refresh_token: 'secret-refresh', expires_in: 3600 })
-    if (url.endsWith('/builds/tokens')) return buildsAllowed
-      ? Response.json({ success: true, result: [{ build_token_uuid: 'build-token' }] })
-      : Response.json({ success: false, errors: [{ code: 10000, message: 'Authentication error' }] }, { status: 403 })
-    return Response.json({ success: true, result: [{ id: 'a'.repeat(32), name: 'My account' }] })
-  }))
-  const start = await web.fetch(req('/api/deploy/oauth'), env)
-  const cookie = start.headers.get('set-cookie')!.split(';')[0]!
-  const auth = new URL(start.headers.get('location')!)
-  await web.fetch(req('/api/deploy/callback?code=one&state=' + auth.searchParams.get('state'), cookie), env)
-  const body = { ownerEmail: 'owner@example.com', accountId: 'a'.repeat(32), name: 'Community', version: 'v0.2.0-alpha.1' }
-  const denied = await web.fetch(req('/api/deploy/start', cookie, body), env)
-  expect(denied.status).toBe(403)
-  expect(await denied.text()).toContain('Reconnect Cloudflare')
-  expect((await webSession(req('/', cookie), env)).data.worker).toBeUndefined()
-  expect(calls.some(call => call.includes('/workers/workers') && call.startsWith('POST'))).toBe(false)
-  buildsAllowed = true
-  expect((await web.fetch(req('/api/deploy/start', cookie, body), env)).status).toBe(200)
-  expect((await webSession(req('/', cookie), env)).data.buildTokenId).toBe('build-token')
 })
 
 it('requires an server proof and prevents directory ownership replacement', async () => {
@@ -212,10 +209,7 @@ async function connectedSession(completed = false) {
 
 it('keeps account access after completion and allows another deployment without losing the first claim', async () => {
   const cookie = await connectedSession(true)
-  vi.stubGlobal('fetch', vi.fn(async (url: string) => {
-    if (url.endsWith('/builds/tokens')) return Response.json({ success: true, result: [{ build_token_uuid: 'build-token' }] })
-    return Response.json({ success: true, result: [{ id: 'a'.repeat(32), name: 'Account' }] })
-  }))
+  vi.stubGlobal('fetch', vi.fn(async () => Response.json({ success: true, result: [{ id: 'a'.repeat(32), name: 'Account' }] })))
   const before = await (await web.fetch(req('/api/deploy/session', cookie), env)).json()
   expect(before.authorized).toBe(true)
   expect(before.accounts).toEqual([{ id: 'a'.repeat(32), name: 'Account' }])
