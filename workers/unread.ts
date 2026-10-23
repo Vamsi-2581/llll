@@ -6,8 +6,9 @@ export const channelUnreadSql = `
     FROM (
       SELECT m.channel_id, MAX(m.id) AS latest_message_id
       FROM messages m
-      WHERE m.channel_id = ?
-         OR m.channel_id IN (SELECT id FROM channels WHERE parent_id = ? AND type = 'thread')
+      WHERE (m.channel_id = ?
+         OR m.channel_id IN (SELECT id FROM channels WHERE parent_id = ? AND type = 'thread'))
+        AND m.deleted_at IS NULL
       GROUP BY m.channel_id
     ) latest
     LEFT JOIN channel_reads cr
@@ -24,6 +25,7 @@ export const channelUnreadCountSql = `
     ON cr.channel_id = m.channel_id AND cr.user_id = ?
   WHERE (m.channel_id = ?
      OR m.channel_id IN (SELECT id FROM channels WHERE parent_id = ? AND type = 'thread'))
+    AND m.deleted_at IS NULL
     AND (cr.last_read_message_id IS NULL OR cr.last_read_message_id < m.id)
 `
 
@@ -41,7 +43,8 @@ export function channelUnreadCountsSql(channelCount: number): string {
     LEFT JOIN channels scoped
       ON scoped.id = root.id
       OR (scoped.parent_id = root.id AND scoped.type = 'thread')
-    LEFT JOIN messages m ON m.channel_id = scoped.id
+    LEFT JOIN messages m
+      ON m.channel_id = scoped.id AND m.deleted_at IS NULL
     LEFT JOIN channel_reads cr
       ON cr.channel_id = scoped.id AND cr.user_id = ?
     WHERE root.id IN (${placeholders})
@@ -88,7 +91,7 @@ export const recentThreadsSql = `
            WHEN cr.last_read_message_id IS NOT NULL AND cr.last_read_message_id < m.id THEN 1 ELSE 0
          END) AS INTEGER) AS unreadCount
   FROM channels t
-  JOIN messages m ON m.channel_id = t.id
+  JOIN messages m ON m.channel_id = t.id AND m.deleted_at IS NULL
   LEFT JOIN channel_reads cr ON cr.channel_id = t.id AND cr.user_id = ?
   WHERE t.type = 'thread' AND t.parent_id IS NOT NULL
   GROUP BY t.id
