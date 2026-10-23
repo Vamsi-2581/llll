@@ -18,7 +18,7 @@ beforeEach(() => {
   db = new DatabaseSync(':memory:')
   db.exec(`
     CREATE TABLE channels (id TEXT PRIMARY KEY, type TEXT NOT NULL, parent_id TEXT);
-    CREATE TABLE messages (id TEXT PRIMARY KEY, channel_id TEXT NOT NULL);
+    CREATE TABLE messages (id TEXT PRIMARY KEY, channel_id TEXT NOT NULL, deleted_at TEXT);
     CREATE TABLE channel_reads (
       channel_id TEXT NOT NULL,
       user_id TEXT NOT NULL,
@@ -35,8 +35,8 @@ describe('channel unread aggregation', () => {
     db.exec(`
       INSERT INTO channels VALUES ('dm-1', 'dm', NULL), ('thread-1', 'thread', 'dm-1');
       INSERT INTO messages VALUES
-        ('01990000-0000-7000-8000-000000000001', 'dm-1'),
-        ('01990000-0000-7000-8000-000000000002', 'thread-1');
+        ('01990000-0000-7000-8000-000000000001', 'dm-1', NULL),
+        ('01990000-0000-7000-8000-000000000002', 'thread-1', NULL);
       INSERT INTO channel_reads VALUES
         ('dm-1', 'user-1', '01990000-0000-7000-8000-000000000001');
     `)
@@ -52,13 +52,29 @@ describe('channel unread aggregation', () => {
     expect(unreadCount('user-1', 'dm-1')).toBe(0)
   })
 
+  it('does not count deleted messages in unread status or counts', () => {
+    db.exec(`
+      INSERT INTO channels VALUES ('channel-1', 'text', NULL), ('thread-1', 'thread', 'channel-1');
+      INSERT INTO messages VALUES
+        ('01990000-0000-7000-8000-000000000001', 'channel-1', NULL),
+        ('01990000-0000-7000-8000-000000000002', 'channel-1', '2026-10-23T10:00:00.000Z'),
+        ('01990000-0000-7000-8000-000000000003', 'thread-1', '2026-10-23T10:01:00.000Z');
+
+      INSERT INTO channel_reads VALUES
+        ('channel-1', 'user-1', '01990000-0000-7000-8000-000000000001');
+    `)
+
+    expect(hasUnread('user-1', 'channel-1')).toBe(false)
+    expect(unreadCount('user-1', 'channel-1')).toBe(0)
+  })
+
   it('counts unread root and thread messages independently from their cursors', () => {
     db.exec(`
       INSERT INTO channels VALUES ('channel-1', 'text', NULL), ('thread-1', 'thread', 'channel-1');
       INSERT INTO messages VALUES
-        ('01990000-0000-7000-8000-000000000001', 'channel-1'),
-        ('01990000-0000-7000-8000-000000000002', 'channel-1'),
-        ('01990000-0000-7000-8000-000000000003', 'thread-1');
+        ('01990000-0000-7000-8000-000000000001', 'channel-1', NULL),
+        ('01990000-0000-7000-8000-000000000002', 'channel-1', NULL),
+        ('01990000-0000-7000-8000-000000000003', 'thread-1', NULL);
       INSERT INTO channel_reads VALUES
         ('channel-1', 'user-1', '01990000-0000-7000-8000-000000000001');
     `)
@@ -73,16 +89,16 @@ describe('channel unread aggregation', () => {
         ('channel-2', 'text', NULL),
         ('thread-1', 'thread', 'channel-1');
       INSERT INTO messages VALUES
-        ('01990000-0000-7000-8000-000000000001', 'channel-1'),
-        ('01990000-0000-7000-8000-000000000002', 'thread-1'),
-        ('01990000-0000-7000-8000-000000000003', 'channel-2');
+        ('01990000-0000-7000-8000-000000000001', 'channel-1', NULL),
+        ('01990000-0000-7000-8000-000000000002', 'thread-1', '2026-10-23T10:00:00.000Z'),
+        ('01990000-0000-7000-8000-000000000003', 'channel-2', NULL);
       INSERT INTO channel_reads VALUES
         ('channel-1', 'user-1', '01990000-0000-7000-8000-000000000001');
     `)
 
     const rows = db.prepare(channelUnreadCountsSql(2)).all('user-1', 'channel-1', 'channel-2')
     expect(rows).toEqual([
-      { channel_id: 'channel-1', unread_count: 1 },
+      { channel_id: 'channel-1', unread_count: 0 },
       { channel_id: 'channel-2', unread_count: 1 },
     ])
   })
@@ -91,8 +107,8 @@ describe('channel unread aggregation', () => {
     db.exec(`
       INSERT INTO channels VALUES ('channel-1', 'text', NULL);
       INSERT INTO messages VALUES
-        ('01990000-0000-7000-8000-000000000001', 'channel-1'),
-        ('01990000-0000-7000-8000-000000000002', 'channel-1');
+        ('01990000-0000-7000-8000-000000000001', 'channel-1', NULL),
+        ('01990000-0000-7000-8000-000000000002', 'channel-1', NULL);
       INSERT INTO channel_reads VALUES
         ('channel-1', 'user-1', '01990000-0000-7000-8000-000000000002');
       INSERT INTO channel_reads VALUES
@@ -119,7 +135,7 @@ describe('recent threads for the navigation', () => {
     tdb = new DatabaseSync(':memory:')
     tdb.exec(`
       CREATE TABLE channels (id TEXT PRIMARY KEY, type TEXT NOT NULL, parent_id TEXT, name TEXT NOT NULL);
-      CREATE TABLE messages (id TEXT PRIMARY KEY, channel_id TEXT NOT NULL, created_at TEXT NOT NULL);
+      CREATE TABLE messages (id TEXT PRIMARY KEY, channel_id TEXT NOT NULL, created_at TEXT NOT NULL, deleted_at TEXT);
       CREATE TABLE channel_reads (channel_id TEXT NOT NULL, user_id TEXT NOT NULL, last_read_message_id TEXT, PRIMARY KEY (channel_id, user_id));
       INSERT INTO channels VALUES
         ('channel-1', 'text', NULL, 'general'),
@@ -128,11 +144,12 @@ describe('recent threads for the navigation', () => {
         ('stale-unread', 'thread', 'channel-1', 'Stale but unread'),
         ('never-opened', 'thread', 'channel-1', 'Never opened');
       INSERT INTO messages VALUES
-        ('m1', 'recent', '2026-09-27T10:00:00.000Z'),
-        ('m2', 'stale', '2026-09-01T10:00:00.000Z'),
-        ('m3', 'stale-unread', '2026-09-01T10:00:00.000Z'),
-        ('m4', 'stale-unread', '2026-09-01T11:00:00.000Z'),
-        ('m5', 'never-opened', '2026-09-01T10:00:00.000Z');
+        ('m1', 'recent', '2026-09-27T10:00:00.000Z', NULL),
+        ('m2', 'stale', '2026-09-01T10:00:00.000Z', NULL),
+        ('m3', 'stale-unread', '2026-09-01T10:00:00.000Z', NULL),
+        ('m4', 'stale-unread', '2026-09-01T11:00:00.000Z', NULL),
+        ('m5', 'never-opened', '2026-09-01T10:00:00.000Z', NULL),
+        ('m6', 'stale-unread', '2026-09-01T12:00:00.000Z', '2026-09-01T12:01:00.000Z');
       INSERT INTO channel_reads VALUES
         ('stale', 'user-1', 'm2'),
         ('stale-unread', 'user-1', 'm3');
@@ -147,5 +164,15 @@ describe('recent threads for the navigation', () => {
     expect(Object.keys(byId).sort()).toEqual(['recent', 'stale-unread'])
     expect(byId['stale-unread']).toMatchObject({ title: 'Stale but unread', unreadCount: 1, opened: 1 })
     expect(byId.recent).toMatchObject({ unreadCount: 0, opened: 0 })
+  })
+
+  it('omits a thread whose only recent messages were deleted', () => {
+    tdb.exec(`
+      INSERT INTO channels VALUES ('deleted-recent', 'thread', 'channel-1', 'Deleted recent thread');
+      INSERT INTO messages VALUES ('m7', 'deleted-recent', '2026-09-27T10:00:00.000Z', '2026-09-27T10:01:00.000Z');
+    `)
+
+    const rows = tdb.prepare(recentThreadsSql).all('user-1', '2026-09-20T00:00:00.000Z') as Array<{ id: string }>
+    expect(rows.map(row => row.id)).not.toContain('deleted-recent')
   })
 })
