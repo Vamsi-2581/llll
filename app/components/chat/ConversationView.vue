@@ -364,6 +364,8 @@ async function removeParticipant(userId: string) {
   }
 }
 
+const privateMembersOpen = ref(false)
+watch(channelId, () => { privateMembersOpen.value = false })
 const renaming = ref(false)
 const rename = ref('')
 watch(headerName, (n) => { if (!renaming.value) rename.value = n }, { immediate: true })
@@ -405,6 +407,7 @@ defineShortcuts({
       <UButton :label="removePerson?.id === session.user?.id ? 'Leave group' : 'Remove'" color="error" :loading="dmBusy" @click="removePerson && removeParticipant(removePerson.id)" />
     </template>
   </UModal>
+  <SettingsPrivateChannelMembers v-if="channel && !isDm && channel.visibility === 'private'" v-model:open="privateMembersOpen" :server-id="serverId" :channel="channel" />
   <div class="relative flex-1 min-h-0 h-full flex bg-default">
     <div
       class="relative flex-1 min-w-0 flex flex-col min-h-0"
@@ -498,6 +501,9 @@ defineShortcuts({
           </UTooltip>
           <UTooltip v-if="isDm && !directAgentId" :text="isGroup ? 'Group participants' : 'New group with…'">
             <UButton color="neutral" variant="ghost" size="sm" square icon="i-ph-user-plus" :aria-label="isGroup ? 'Group participants' : 'New group with…'" @click="addOpen = !addOpen" />
+          </UTooltip>
+          <UTooltip v-if="!isDm && type === 'text' && channel?.visibility === 'private' && can(Permission.manageChannels) && channelsQ.data.value?.channels.some(item => item.id === channelId)" text="Manage channel members">
+            <UButton color="neutral" variant="ghost" size="sm" square icon="i-ph-users" aria-label="Manage channel members" @click="privateMembersOpen = true" />
           </UTooltip>
           <UTooltip :text="ui.rightPanelOpen ? 'Close right panel' : 'Open right panel'">
             <UButton
